@@ -25,7 +25,23 @@ const app = express();
 
 // Middleware
 app.use(express.json());
-app.use(cors({ origin: process.env.CORS_ORIGIN || 'http://localhost:5173' }));
+
+// Normalize CORS origins: strip trailing slashes, support comma-separated list
+const normalizeOrigin = (origin) => origin.replace(/\/+$/, '');
+const corsOrigins = (process.env.CORS_ORIGIN || 'http://localhost:5173')
+  .split(',')
+  .map((o) => o.trim())
+  .filter(Boolean)
+  .map(normalizeOrigin);
+
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin || corsOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+    return callback(new Error(`Origin ${origin} not allowed by CORS`));
+  },
+}));
 
 // Set up Helmet with configuration to allow resource sharing/loading locally if needed
 app.use(helmet({
