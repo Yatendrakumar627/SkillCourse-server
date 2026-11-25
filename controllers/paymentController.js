@@ -1,19 +1,62 @@
+import crypto from 'crypto';
 import mongoose from 'mongoose';
 import Payment from '../models/Payment.js';
 import Enrollment from '../models/Enrollment.js';
 import Course from '../models/Course.js';
 import { createNotificationHelper } from './notificationController.js';
 
+const UTR_REGEX = /^[A-Z0-9]{8,30}$/;
+
+const approvePaymentAndGrantAccess = async (payment, reviewerId = null) => {
+  payment.status = 'approved';
+  payment.rejectionReason = undefined;
+  if (reviewerId) {
+    payment.reviewedBy = reviewerId;
+  }
+  await payment.save();
+
+  const courseId = payment.course?._id || payment.course;
+  if (courseId) {
+    await Enrollment.findOneAndUpdate(
+      { user: payment.user, course: courseId },
+      { $set: { paymentId: payment._id, accessGranted: true, grantedAt: new Date() } },
+      { upsert: true, returnDocument: 'after' }
+    );
+  }
+
+  const courseTitle = payment.course?.title || 'your selected course';
+  await createNotificationHelper(
+    payment.user,
+    'Payment Approved!',
+    `Your payment for "${courseTitle}" has been verified. You now have full access to class links and resources.`
+  );
+};
+
+export const getPaymentConfig = (req, res) => {
+  res.json({
+    upiId: process.env.PAYMENT_UPI_ID?.trim() || 'pay@skillcourse',
+    upiName: process.env.PAYMENT_UPI_NAME?.trim() || 'SkillCourse Education',
+    bankName: process.env.PAYMENT_BANK_NAME?.trim() || 'SkillCourse Education',
+    accountNumber: process.env.PAYMENT_ACCOUNT_NUMBER?.trim() || '1234567890',
+    ifsc: process.env.PAYMENT_IFSC?.trim() || 'SKILL0001',
+    autoVerifyEnabled: Boolean(process.env.UPI_WEBHOOK_SECRET),
+  });
+};
+
 export const submitPayment = async (req, res) => {
   const { course } = req.body;
-  const transactionId = req.body.transactionId?.trim();
+  const transactionId = typeof req.body.transactionId === 'string'
+    ? req.body.transactionId.trim().toUpperCase()
+    : '';
 
   try {
     if (!course || !mongoose.Types.ObjectId.isValid(course)) {
       return res.status(400).json({ message: 'Valid course ID is required' });
     }
-    if (!transactionId) {
-      return res.status(400).json({ message: 'Transaction ID is required' });
+    if (!UTR_REGEX.test(transactionId)) {
+      return res.status(400).json({
+        message: 'Please enter a valid 8–30 character UTR / Transaction Reference ID (letters and numbers only)'
+      });
     }
     if (!req.file) {
       return res.status(400).json({ message: 'Please upload a payment screenshot receipt' });
@@ -119,39 +162,24 @@ export const updatePaymentStatus = async (req, res) => {
       return res.status(404).json({ message: 'Payment not found' });
     }
 
-    payment.status = status;
-    payment.reviewedBy = req.user._id;
-    if (status === 'rejected') {
-      payment.rejectionReason = rejectionReason?.trim() || 'Receipt could not be verified';
-    } else {
-      payment.rejectionReason = undefined;
-    }
-    await payment.save();
-
-    // Update or create corresponding enrollment access status
-    const courseId = payment.course?._id || payment.course;
-    if (courseId) {
-      const updateOps =
-        status === 'approved'
-          ? { $set: { paymentId: payment._id, accessGranted: true, grantedAt: new Date() } }
-          : { $set: { paymentId: payment._id, accessGranted: false }, $unset: { grantedAt: 1 } };
-
-      await Enrollment.findOneAndUpdate(
-        { user: payment.user, course: courseId },
-        updateOps,
-        { upsert: true, new: true }
-      );
-    }
-
-    // Trigger Notification
-    const courseTitle = payment.course?.title || 'your selected course';
     if (status === 'approved') {
-      await createNotificationHelper(
-        payment.user,
-        'Payment Approved!',
-        `Your payment for "${courseTitle}" has been verified. You now have full access to class links and resources.`
-      );
+      await approvePaymentAndGrantAccess(payment, req.user._id);
     } else {
+      payment.status = 'rejected';
+      payment.reviewedBy = req.user._id;
+      payment.rejectionReason = rejectionReason?.trim() || 'Receipt could not be verified';
+      await payment.save();
+
+      const courseId = payment.course?._id || payment.course;
+      if (courseId) {
+        await Enrollment.findOneAndUpdate(
+          { user: payment.user, course: courseId },
+          { $set: { paymentId: payment._id, accessGranted: false }, $unset: { grantedAt: 1 } },
+          { upsert: true, returnDocument: 'after' }
+        );
+      }
+
+      const courseTitle = payment.course?.title || 'your selected course';
       await createNotificationHelper(
         payment.user,
         'Payment Verification Failed',
@@ -160,6 +188,58 @@ export const updatePaymentStatus = async (req, res) => {
     }
 
     res.json(payment);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Free UPI Automation Webhook (e.g. Android SMS/Notification forwarder or self-hosted listener)
+export const handleUpiWebhook = async (req, res) => {
+  const webhookSecret = process.env.UPI_WEBHOOK_SECRET;
+  if (!webhookSecret) {
+    return res.status(503).json({ message: 'UPI webhook automation is not configured' });
+  }
+
+  const signature = req.headers['x-webhook-signature'];
+  if (typeof signature !== 'string' || !signature) {
+    return res.status(401).json({ message: 'Missing webhook signature' });
+  }
+
+  const expected = crypto
+    .createHmac('sha256', webhookSecret)
+    .update(JSON.stringify(req.body || {}))
+    .digest('hex');
+
+  const sigBuf = Buffer.from(signature);
+  const expBuf = Buffer.from(expected);
+  if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) {
+    return res.status(401).json({ message: 'Invalid webhook signature' });
+  }
+
+  try {
+    const utr = typeof req.body.utr === 'string' ? req.body.utr.trim().toUpperCase() : '';
+    const amount = Number(req.body.amount);
+
+    if (!UTR_REGEX.test(utr) || Number.isNaN(amount) || amount <= 0) {
+      return res.status(400).json({ message: 'Valid UTR and positive amount are required' });
+    }
+
+    const payment = await Payment.findOne({ transactionId: utr }).populate('course');
+    if (!payment) {
+      return res.status(404).json({ message: 'No matching payment submission found for UTR' });
+    }
+    if (payment.status === 'approved') {
+      return res.json({ message: 'Payment already verified', paymentId: payment._id });
+    }
+    if (payment.status !== 'pending') {
+      return res.status(409).json({ message: `Payment is already ${payment.status}` });
+    }
+    if (Number(payment.amount) !== amount) {
+      return res.status(400).json({ message: 'Amount mismatch' });
+    }
+
+    await approvePaymentAndGrantAccess(payment);
+    res.json({ message: 'Payment verified and course access granted', paymentId: payment._id });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
