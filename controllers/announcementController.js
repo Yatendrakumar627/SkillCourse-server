@@ -77,6 +77,37 @@ export const createAnnouncement = async (req, res) => {
   }
 };
 
+export const updateAnnouncement = async (req, res) => {
+  try {
+    const announcement = await Announcement.findById(req.params.id);
+    if (!announcement) return res.status(404).json({ message: 'Announcement not found' });
+
+    if (req.body.title !== undefined) {
+      const title = String(req.body.title).trim();
+      if (!title) return res.status(400).json({ message: 'Title cannot be empty' });
+      announcement.title = title;
+    }
+    if (req.body.message !== undefined) {
+      const message = String(req.body.message).trim();
+      if (!message) return res.status(400).json({ message: 'Message cannot be empty' });
+      announcement.message = message;
+    }
+    if (req.body.course !== undefined) {
+      const course = req.body.course || null;
+      if (course) {
+        const courseExists = await Course.exists({ _id: course });
+        if (!courseExists) return res.status(404).json({ message: 'Target course not found' });
+      }
+      announcement.course = course;
+    }
+
+    await announcement.save();
+    res.json(announcement);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
 export const deleteAnnouncement = async (req, res) => {
   try {
     const announcement = await Announcement.findByIdAndDelete(req.params.id);

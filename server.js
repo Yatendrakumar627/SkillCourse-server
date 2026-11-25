@@ -7,6 +7,15 @@ import dotenv from 'dotenv';
 import multer from 'multer';
 import path from 'path';
 import { UPLOAD_DIR } from './middleware/upload.js';
+import { protect, adminOnly } from './middleware/auth.js';
+import Module from './models/Module.js';
+import Enrollment from './models/Enrollment.js';
+import {
+  isTelegramConfigured,
+  sendTelegramMessage,
+  createDeliveryLink,
+  startTelegramBotListener,
+} from './utils/telegramNotifier.js';
 
 // Route imports
 import authRoutes from './routes/auth.js';
@@ -133,6 +142,58 @@ app.use('/api/students', studentRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/contact', contactRoutes);
 
+app.post('/api/telegram/test', protect, adminOnly, async (req, res) => {
+  if (!isTelegramConfigured()) {
+    return res.status(503).json({
+      message: 'Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHANNEL_ID in server/.env first.',
+    });
+  }
+  const result = await sendTelegramMessage(
+    '<b>SkillCourse LMS</b>\nTelegram database event channel connected successfully.'
+  );
+  if (!result.sent) {
+    return res.status(502).json({ message: `Telegram test failed: ${result.reason}` });
+  }
+  res.json({ message: 'Test message sent to Telegram channel!', messageId: result.messageId });
+});
+
+app.post('/api/telegram/deliver', protect, async (req, res) => {
+  try {
+    if (!isTelegramConfigured()) {
+      return res.status(503).json({ message: 'Telegram file delivery is not configured' });
+    }
+    const { moduleId } = req.body;
+    if (!moduleId || !mongoose.Types.ObjectId.isValid(moduleId)) {
+      return res.status(400).json({ message: 'Valid module ID is required' });
+    }
+
+    const mod = await Module.findById(moduleId);
+    if (!mod || !mod.telegramMessageId) {
+      return res.status(404).json({ message: 'No Telegram file attached to this module' });
+    }
+
+    if (req.user.role !== 'admin') {
+      const enrolled = await Enrollment.exists({
+        user: req.user._id,
+        course: mod.course,
+        accessGranted: true,
+      });
+      if (!enrolled) {
+        return res.status(403).json({ message: 'Access denied. Enroll in this course first.' });
+      }
+    }
+
+    const delivery = await createDeliveryLink({
+      userId: req.user._id,
+      moduleTitle: mod.title,
+      messageId: mod.telegramMessageId,
+    });
+    res.json(delivery);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
 // Basic Route
 app.get('/api/health', (req, res) => {
   res.status(200).json({ status: 'ok', message: 'Server is running' });
@@ -176,6 +237,7 @@ mongoose
     console.log('Connected to MongoDB');
     app.listen(PORT, () => {
       console.log(`Server is running on port ${PORT}`);
+      startTelegramBotListener();
     });
   })
   .catch((error) => {

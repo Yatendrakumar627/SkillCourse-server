@@ -1,6 +1,8 @@
 import User from '../models/User.js';
+import Course from '../models/Course.js';
 import Enrollment from '../models/Enrollment.js';
 import AssignmentSubmission from '../models/AssignmentSubmission.js';
+import { createNotificationHelper } from './notificationController.js';
 
 export const getStudents = async (req, res) => {
   try {
@@ -61,6 +63,54 @@ export const getStudentActivityDetails = async (req, res) => {
     const submissions = await AssignmentSubmission.find({ student: student._id }).populate('assignment');
 
     res.json({ student, enrollments, submissions });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+export const grantStudentEnrollment = async (req, res) => {
+  try {
+    const { courseId } = req.body;
+    if (!courseId) {
+      return res.status(400).json({ message: 'Course ID is required' });
+    }
+
+    const [student, course] = await Promise.all([
+      User.findOne({ _id: req.params.id, role: 'student' }).select('_id name'),
+      Course.findById(courseId).select('_id title'),
+    ]);
+    if (!student) return res.status(404).json({ message: 'Student not found' });
+    if (!course) return res.status(404).json({ message: 'Course not found' });
+
+    const enrollment = await Enrollment.findOneAndUpdate(
+      { user: student._id, course: course._id },
+      { $set: { accessGranted: true, grantedAt: new Date() } },
+      { upsert: true, returnDocument: 'after' }
+    );
+
+    await createNotificationHelper(
+      student._id,
+      'Course Access Granted!',
+      `An administrator has granted you access to "${course.title}".`
+    );
+
+    res.status(200).json(enrollment);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+export const revokeStudentEnrollment = async (req, res) => {
+  try {
+    const enrollment = await Enrollment.findOneAndUpdate(
+      { user: req.params.id, course: req.params.courseId },
+      { $set: { accessGranted: false }, $unset: { grantedAt: 1 } },
+      { returnDocument: 'after' }
+    );
+    if (!enrollment) {
+      return res.status(404).json({ message: 'Enrollment not found' });
+    }
+    res.json({ message: 'Course access revoked', enrollment });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

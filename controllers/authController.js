@@ -1,6 +1,7 @@
 import jwt from 'jsonwebtoken';
 import User from '../models/User.js';
 import { getJwtSecret } from '../middleware/auth.js';
+import { notifyTelegramEvent } from '../utils/telegramNotifier.js';
 
 const generateToken = (id) => {
   return jwt.sign({ id }, getJwtSecret(), {
@@ -38,6 +39,13 @@ export const registerUser = async (req, res) => {
       role,
       status: 'active'
     });
+
+    notifyTelegramEvent('New Student Registered', [
+      ['Name', user.name],
+      ['Email', user.email],
+      ['Phone', user.phone || '—'],
+      ['User ID', user._id],
+    ]);
 
     res.status(201).json({
       _id: user._id,

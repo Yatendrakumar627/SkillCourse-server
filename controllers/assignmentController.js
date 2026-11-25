@@ -3,6 +3,7 @@ import AssignmentSubmission from '../models/AssignmentSubmission.js';
 import Enrollment from '../models/Enrollment.js';
 import Course from '../models/Course.js';
 import { createNotificationHelper, createBulkNotificationsHelper } from './notificationController.js';
+import { notifyTelegramEvent } from '../utils/telegramNotifier.js';
 
 export const getAssignmentsByCourse = async (req, res) => {
   try {
@@ -24,7 +25,64 @@ export const getAssignmentsByCourse = async (req, res) => {
       return res.json({ assignments, submissions });
     }
 
-    res.json({ assignments });
+    // For admins, include submission counts per assignment in one aggregation
+    const counts = await AssignmentSubmission.aggregate([
+      { $match: { assignment: { $in: assignments.map((a) => a._id) } } },
+      { $group: { _id: '$assignment', count: { $sum: 1 } } },
+    ]);
+    const submissionCounts = Object.fromEntries(counts.map((c) => [String(c._id), c.count]));
+
+    res.json({ assignments, submissionCounts });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+export const updateAssignment = async (req, res) => {
+  try {
+    const filter = req.params.courseId
+      ? { _id: req.params.id, course: req.params.courseId }
+      : { _id: req.params.id };
+    const assignment = await Assignment.findOne(filter);
+    if (!assignment) {
+      return res.status(404).json({ message: 'Assignment not found' });
+    }
+
+    if (req.body.title !== undefined) {
+      const title = String(req.body.title).trim();
+      if (!title) return res.status(400).json({ message: 'Assignment title cannot be empty' });
+      assignment.title = title;
+    }
+    if (req.body.description !== undefined) {
+      const description = String(req.body.description).trim();
+      if (!description) return res.status(400).json({ message: 'Assignment description cannot be empty' });
+      assignment.description = description;
+    }
+    if (req.body.dueDate !== undefined) {
+      assignment.dueDate = req.body.dueDate ? new Date(req.body.dueDate) : undefined;
+    }
+    if (req.file) {
+      assignment.filePath = `/uploads/${req.file.filename}`;
+    }
+
+    await assignment.save();
+    res.json(assignment);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+export const deleteAssignment = async (req, res) => {
+  try {
+    const filter = req.params.courseId
+      ? { _id: req.params.id, course: req.params.courseId }
+      : { _id: req.params.id };
+    const assignment = await Assignment.findOneAndDelete(filter);
+    if (!assignment) {
+      return res.status(404).json({ message: 'Assignment not found' });
+    }
+    await AssignmentSubmission.deleteMany({ assignment: assignment._id });
+    res.json({ message: 'Assignment deleted' });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -120,6 +178,12 @@ export const submitAssignment = async (req, res) => {
       },
       { new: true, upsert: true }
     );
+
+    notifyTelegramEvent('New Assignment Submission', [
+      ['Student', `${req.user.name} (${req.user.email})`],
+      ['Assignment', assignmentDoc.title],
+      ['Has File', req.file ? 'Yes' : 'No'],
+    ]);
 
     res.status(201).json(submission);
   } catch (error) {

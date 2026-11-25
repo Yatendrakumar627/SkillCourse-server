@@ -234,6 +234,25 @@ export const updateCourse = async (req, res) => {
       unsetUpdates.category = 1;
     }
 
+    if (Object.prototype.hasOwnProperty.call(setUpdates, 'displayOrder')) {
+      if (setUpdates.displayOrder === '' || setUpdates.displayOrder === null) {
+        setUpdates.displayOrder = 100;
+      } else {
+        const numericOrder = Number(setUpdates.displayOrder);
+        if (Number.isNaN(numericOrder)) {
+          return res.status(400).json({ message: 'Display order must be a valid number' });
+        }
+        setUpdates.displayOrder = numericOrder;
+      }
+    }
+
+    if (Object.prototype.hasOwnProperty.call(setUpdates, 'isFeatured')) {
+      setUpdates.isFeatured = Boolean(setUpdates.isFeatured);
+    }
+    if (Object.prototype.hasOwnProperty.call(setUpdates, 'isPublished')) {
+      setUpdates.isPublished = Boolean(setUpdates.isPublished);
+    }
+
     const updateQuery = Object.keys(unsetUpdates).length
       ? { $set: setUpdates, $unset: unsetUpdates }
       : { $set: setUpdates };
@@ -241,7 +260,7 @@ export const updateCourse = async (req, res) => {
     const updatedCourse = await Course.findByIdAndUpdate(
       req.params.id,
       updateQuery,
-      { new: true, runValidators: true }
+      { returnDocument: 'after', runValidators: true }
     );
     res.json(updatedCourse);
   } catch (error) {

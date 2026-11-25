@@ -4,6 +4,7 @@ import Payment from '../models/Payment.js';
 import Enrollment from '../models/Enrollment.js';
 import Course from '../models/Course.js';
 import { createNotificationHelper } from './notificationController.js';
+import { notifyTelegramEvent } from '../utils/telegramNotifier.js';
 
 const UTR_REGEX = /^[A-Z0-9]{8,30}$/;
 
@@ -30,6 +31,13 @@ const approvePaymentAndGrantAccess = async (payment, reviewerId = null) => {
     'Payment Approved!',
     `Your payment for "${courseTitle}" has been verified. You now have full access to class links and resources.`
   );
+
+  notifyTelegramEvent('Payment Approved', [
+    ['Course', courseTitle],
+    ['Amount', `₹${payment.amount}`],
+    ['UTR / Ref', payment.transactionId],
+    ['Verified By', reviewerId ? 'Admin' : 'UPI Webhook'],
+  ]);
 };
 
 export const getPaymentConfig = (req, res) => {
@@ -114,12 +122,20 @@ export const submitPayment = async (req, res) => {
           $set: { paymentId: payment._id, accessGranted: false },
           $unset: { grantedAt: 1 }
         },
-        { upsert: true, new: true }
+        { upsert: true, returnDocument: 'after' }
       );
     } catch (enrollErr) {
       await Payment.findByIdAndDelete(payment._id);
       throw enrollErr;
     }
+
+    notifyTelegramEvent('New Payment Submitted', [
+      ['Student', `${req.user.name} (${req.user.email})`],
+      ['Course', courseDoc.title],
+      ['Amount', `₹${serverAmount}`],
+      ['UTR / Ref', transactionId],
+      ['Status', 'Pending Verification'],
+    ]);
 
     res.status(201).json(payment);
   } catch (error) {
@@ -185,6 +201,13 @@ export const updatePaymentStatus = async (req, res) => {
         'Payment Verification Failed',
         `Your payment for "${courseTitle}" was rejected. Reason: ${payment.rejectionReason}`
       );
+
+      notifyTelegramEvent('Payment Rejected', [
+        ['Course', courseTitle],
+        ['Amount', `₹${payment.amount}`],
+        ['UTR / Ref', payment.transactionId],
+        ['Reason', payment.rejectionReason],
+      ]);
     }
 
     res.json(payment);

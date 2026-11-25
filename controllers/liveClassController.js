@@ -69,6 +69,44 @@ export const createLiveClass = async (req, res) => {
   }
 };
 
+export const updateLiveClass = async (req, res) => {
+  try {
+    const liveClass = await LiveClass.findById(req.params.id);
+    if (!liveClass) return res.status(404).json({ message: 'Live class not found' });
+
+    if (req.body.course !== undefined) {
+      const courseExists = await Course.exists({ _id: req.body.course });
+      if (!courseExists) return res.status(404).json({ message: 'Course not found' });
+      liveClass.course = req.body.course;
+    }
+    if (req.body.topic !== undefined) {
+      const topic = String(req.body.topic).trim();
+      if (!topic) return res.status(400).json({ message: 'Class topic cannot be empty' });
+      liveClass.topic = topic;
+    }
+    if (req.body.meetLink !== undefined) {
+      const meetLink = String(req.body.meetLink).trim();
+      if (!meetLink) return res.status(400).json({ message: 'Meet link cannot be empty' });
+      liveClass.meetLink = meetLink;
+    }
+    if (req.body.date !== undefined) {
+      const parsedDate = new Date(req.body.date);
+      if (Number.isNaN(parsedDate.getTime())) {
+        return res.status(400).json({ message: 'Invalid class date' });
+      }
+      liveClass.date = parsedDate;
+    }
+    if (req.body.notesUrl !== undefined) {
+      liveClass.notesUrl = String(req.body.notesUrl).trim();
+    }
+
+    await liveClass.save();
+    res.json(liveClass);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
 export const deleteLiveClass = async (req, res) => {
   try {
     const liveClass = await LiveClass.findByIdAndDelete(req.params.id);
