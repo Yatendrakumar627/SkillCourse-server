@@ -9,10 +9,10 @@ const generateToken = (id) => {
 };
 
 export const registerUser = async (req, res) => {
-  const name = req.body.name?.trim();
-  const email = req.body.email?.trim().toLowerCase();
-  const password = req.body.password;
-  const phone = req.body.phone?.trim();
+  const name = typeof req.body.name === 'string' ? req.body.name.trim() : '';
+  const email = typeof req.body.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+  const password = typeof req.body.password === 'string' ? req.body.password : '';
+  const phone = typeof req.body.phone === 'string' ? req.body.phone.trim() : undefined;
 
   try {
     if (!name || !email || !password) {
@@ -53,8 +53,8 @@ export const registerUser = async (req, res) => {
 };
 
 export const loginUser = async (req, res) => {
-  const email = req.body.email?.trim().toLowerCase();
-  const password = req.body.password;
+  const email = typeof req.body.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+  const password = typeof req.body.password === 'string' ? req.body.password : '';
 
   try {
     if (!email || !password) {
