@@ -26,7 +26,8 @@ const buildUniqueCourseSlug = async (title, excludeId = null) => {
 // --- Categories ---
 export const getCategories = async (req, res) => {
   try {
-    const categories = await CourseCategory.find({});
+    const categories = await CourseCategory.find({}).lean();
+    res.set('Cache-Control', 'public, max-age=120, stale-while-revalidate=300');
     res.json(categories);
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -75,13 +76,16 @@ export const getCourses = async (req, res) => {
       query.category = category;
     }
     // Users can only see published courses unless they are admin
-    if (!req.user || req.user.role !== 'admin') {
+    const isAdmin = req.user?.role === 'admin';
+    if (!isAdmin) {
       query.isPublished = true;
+      res.set('Cache-Control', 'public, max-age=60, stale-while-revalidate=300');
     }
 
     const courses = await Course.find(query)
       .populate('category')
-      .sort({ displayOrder: 1, createdAt: 1 });
+      .sort({ displayOrder: 1, createdAt: 1 })
+      .lean();
     res.json(courses);
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -94,7 +98,7 @@ export const getCourseBySlug = async (req, res) => {
     if (!req.user || req.user.role !== 'admin') {
       query.isPublished = true;
     }
-    const course = await Course.findOne(query).populate('category');
+    const course = await Course.findOne(query).populate('category').lean();
     if (!course) {
       return res.status(404).json({ message: 'Course not found' });
     }

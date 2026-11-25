@@ -18,4 +18,7 @@ const courseSchema = new mongoose.Schema({
   displayOrder: { type: Number, default: 100 }
 }, { timestamps: true });
 
+courseSchema.index({ isPublished: 1, displayOrder: 1, createdAt: 1 });
+courseSchema.index({ category: 1, isPublished: 1, displayOrder: 1 });
+
 export default mongoose.model('Course', courseSchema);
